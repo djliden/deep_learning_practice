@@ -1,0 +1,4 @@
+- use ~pretrained=False~ to NOT use a pretrained model.
+- x axis is epoch
+- separate test dataloader
+- can use lower floating point precision to improve performance ~.to_fp16~.

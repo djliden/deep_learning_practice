@@ -1,0 +1,43 @@
+#+TITLE: NLP, RNNs, Language Model from Scratch
+#+AUTHOR: Daniel Liden
+#+email: dliden@pm.me
+* Notes for Chapter 10: NLP Deep Dive: RNNs
+** Introduction & Background
+   A /language model/ is a "model that has been trained to guess the next word in a text" after reading the preceding words. This is called "self-supervised learning," we just need to give the model a lot of text to work with. Self-supervised learning is usually used to /pre-train/ a model for later use in transfer learning.
+
+  :PROPERTIES:
+  :header-args: :session rnn :kernel fastai :async yes
+  :END:
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+:results:
+: 2
+:end:
+
+
+
+
+* Testing Jupyter Mode Source Blocks
+
+#+BEGIN_SRC jupyter-python :session test :kernel fastai
+x = 'foo'
+y = 'bar'
+x + ' ' + y
+#+END_SRC
+
+#+RESULTS:
+: foo bar
+
+#+begin_quote
+What does ~(shell-command-to-string "jupyter kernelspec list")~ return?
+
+If it doesn't fail and returns the kernelspecs, then it might just be that by the time the ob-jupyter file is loaded (which is when we try to get the kernelspecs) the paths used by Emacs to search for shell programs aren't setup yet. If this is the case you should be able to call ~(org-babel-jupyter-aliases-from-kernelspecs)~ to get everything working again.
+
+The ob-jupyter file is loaded whenever that org-babel-do-load-languages call is evaluated so you should check to see that (executable-find "jupyter") returns a valid path right before the call.
+#+end_quote
+
+OK! So that works, but it looks like there were some problems in the order in which I started my virtual environment compared to when I started emacs. Which makes sense given that I am using emacs-daemon, so emacs is initialized well before I start my virtual environment. Now, onto business!
+

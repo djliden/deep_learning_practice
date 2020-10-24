@@ -133,3 +133,9 @@ data/*
 
 # models
 notebooks/models
+
+# temporary
+/notebooks/tmp/
+
+# pandoc stuff
+*.pandoc

@@ -3,22 +3,340 @@
 #+email: dliden@pm.me
 * Notes for Chapter 10: NLP Deep Dive: RNNs
 ** Introduction & Background
-   A /language model/ is a "model that has been trained to guess the next word in a text" after reading the preceding words. This is called "self-supervised learning," we just need to give the model a lot of text to work with. Self-supervised learning is usually used to /pre-train/ a model for later use in transfer learning.
+#+PROPERTY: header-args:jupyter-python :session rnn :kernel fastai :async yes
+  
+A /language model/ is a "model that has been trained to guess the next word in a text" after reading the preceding words. This is called "self-supervised learning," we just need to give the model a lot of text to work with. Self-supervised learning is usually used to /pre-train/ a model for later use in transfer learning.
+The general process we will be following is:
+- Concatenate all of the documents in our dataset into one big long string and split it into words (tokens)
+- Independent variable is first word to second-to-last word. Dependent variable is second word to last word.
+- Vocab will comprise common words already in vocab of pretrained model, and application-specific words. We will initialize new embedding matrix rows for these new vocab words.
+Some relevant terminology:
+- /Tokenization/ is the process of converting text into a list of words (or characters or substrings)
+- /Numericalization/ means listing all of the unique words that appear in the vocab and converting them to a number by looking up the index in the vocab
+- /Data Loader Creation/: We use the ~LMDataLoader~ class to create independent and dependent variables offset from each other by one token.
+- /Language Model Creation/: Recurrent neural network; details to follow.
 
-  :PROPERTIES:
-  :header-args: :session rnn :kernel fastai :async yes
-  :END:
+We will go through each of these steps separately.
+*** Tokenization
+There are many approaches to tokenization.
+- Word-based tokenization splits by spaces and also applies language-specific rules to separate e.g. don't into do n't to capture meaning.
+- Subword-based tokenization splits words into smaller parts based on common substrings.
+- Character-based tokenization splits a sentence into individual characters.
+**** Word Tokenization in Fastai
+Fastai provides an interface to a range of different tokenizers in external libraries (it does not provide its own tokenizers). We're going to experiment with the IMDb dataset.
+
 #+begin_src jupyter-python
-
+  from fastai.text.all import *
+  path = untar_data(URLs.IMDB)
+  path.ls()
 #+end_src
 
 #+RESULTS:
 :results:
-: 2
+: (#7) [Path('/home/djliden91/.fastai/data/imdb/test'),Path('/home/djliden91/.fastai/data/imdb/imdb.vocab'),Path('/home/djliden91/.fastai/data/imdb/tmp_clas'),Path('/home/djliden91/.fastai/data/imdb/train'),Path('/home/djliden91/.fastai/data/imdb/unsup'),Path('/home/djliden91/.fastai/data/imdb/tmp_lm'),Path('/home/djliden91/.fastai/data/imdb/README')]
 :end:
 
+Now we need to get the text files themselves.
 
+#+begin_src jupyter-python
+  files = get_text_files(path, folders=['train','test','unsup'])
+  txt = files[0].open().read(); txt[:75]
+#+end_src
+  
 
+#+RESULTS:
+:results:
+: what can i say, this film is amazing. it has its flaws like every film does
+:end:
+
+Now, we demonstrate the tokenization functions.
+
+#+begin_src jupyter-python
+  spacy = WordTokenizer()
+  toks = first(spacy([txt]))
+  print(coll_repr(toks,30))
+#+end_src
+
+#+RESULTS:
+:results:
+: (#505) ['what','can','i','say',',','this','film','is','amazing','.','it','has','its','flaws','like','every','film','does','for','example','wobbly','headstones','in','a','graveyard',',','a','clearly','visible','slide'...]
+:end:
+
+The default tokenizer used by ~fastai~ at the time of writing is ~spaCy~. It identifies and handles specific language cases pretty well. For example:
+
+#+begin_src jupyter-python
+first(spacy(['The U.S. dollar $1 is $1.00.']))
+#+end_src
+
+#+RESULTS:
+:results:
+: (#9) ['The','U.S.','dollar','$','1','is','$','1.00','.']
+:end:
+
+We can apply some more specific options and tokenization formats using the ~fastai~ tokenizer class.
+#+begin_src jupyter-python
+  tkn = Tokenizer(spacy)
+  print(coll_repr(tkn(txt), 31))
+#+end_src
+
+#+RESULTS:
+:results:
+: (#537) ['xxbos','what','can','i','say',',','this','film','is','amazing','.','it','has','its','flaws','like','every','film','does','for','example','wobbly','headstones','in','a','graveyard',',','a','clearly','visible','slide'...]
+:end:
+
+In this case, tokens preceded by ~xx~ are special tokens. ~xxbos~ indicates the start of a new text, for example. Other common ones:
+- ~xxmaj~ indicates the following word starts with a capital
+- ~xxunk~ represents that the next word is unknown
+
+We can check on the default rules as follows
+
+#+begin_src jupyter-python
+defaults.text_proc_rules
+#+end_src
+
+#+RESULTS:
+:results:
+| <function | fastai.text.core.fix_html | (x) | > | <function | fastai.text.core.replace_rep | (t) | > | <function | fastai.text.core.replace_wrep | (t) | > | <function | fastai.text.core.spec_add_spaces | (t) | > | <function | fastai.text.core.rm_useless_spaces | (t) | > | <function | fastai.text.core.replace_all_caps | (t) | > | <function | fastai.text.core.replace_maj | (t) | > | <function | fastai.text.core.lowercase | (t add_bos=True add_eos=False) | > |
+:end:
+
+***** Subword Tokenization
+      Particularly with languages such as Japanese or Chinese, spaces do not provide a good guide to divisions between words. Other languages group many "subwords" together into a single word, but the subwords themselves can contain various separate meanings. Subword tokenization can deal with these sorts of situations. This is a two-step process:
+      1. Analyze a corpus of documents. Find the most commonly occurring groups of letters. These are the vocab.
+      2. Tokenize using the subword vocab from (1)
+      Let's try it out.   
+#+begin_src jupyter-python
+  txts = L(o.open().read() for o in files[:2000])
+
+  def subword(sz):
+      sp = SubwordTokenizer(vocab_sz=sz)
+      sp.setup(txts)
+      return ' '.join(first(sp([txt]))[:40])
+
+  subword(1000)
+  #+end_src
+
+  #+RESULTS:
+  :results:
+  : ▁what ▁can ▁i ▁say , ▁this ▁film ▁is ▁amazing . ▁it ▁has ▁its ▁fla w s ▁like ▁every ▁film ▁does ▁for ▁example ▁w o b b ly ▁he ad st one s ▁in ▁a ▁gr a ve y ard ,
+  :end:
+
+The special character ~_~ represents a space in the original text.
+
+The number we passed to ~subword~ represents the size of the vocab. We can use a smaller vocab:
+  
+#+begin_src jupyter-python
+subword(200)
+#+end_src
+
+#+RESULTS:
+:results:
+: ▁w h at ▁c an ▁ i ▁ s a y , ▁this ▁film ▁is ▁a m a z ing . ▁it ▁ha s ▁it s ▁f la w s ▁ li k e ▁ e ver y ▁film ▁
+:end:
+
+In this case, each token represents fewer characters, so it takes more tokens to represent the same sentence. We can also see what happens when we use a /larger/ vocab.
+
+#+begin_src jupyter-python
+subword(10000)
+#+end_src
+
+#+RESULTS:
+:results:
+: ▁what ▁can ▁i ▁say , ▁this ▁film ▁is ▁amazing . ▁it ▁has ▁its ▁flaws ▁like ▁every ▁film ▁does ▁for ▁example ▁ wobbl y ▁head ston es ▁in ▁a ▁graveyard , ▁a ▁clearly ▁ visible ▁ slide ▁board ▁ during ▁the
+:end:
+
+Here we see that our vocab is coming closer to capturing full words. What considerations guide the choice of vocab size? Smaller vocab means smaller embedding matrix and requires less data to learn. A larger vocab will require a larger embedding matrix and thus more data, but it means fewer token per sentence, which translates to faster training, less memory, and fewer states for the model to remember.
+
+***** Numericalization with fastai
+      The next step is to map tokens to integers. We can do this as follows:
+#+begin_src jupyter-python
+  # Revisiting our Tokenizer from before
+  toks = tkn(txt)
+  print(coll_repr(tkn(txt),31))
+#+end_src
+
+#+RESULTS:
+:results:
+: (#537) ['xxbos','what','can','i','say',',','this','film','is','amazing','.','it','has','its','flaws','like','every','film','does','for','example','wobbly','headstones','in','a','graveyard',',','a','clearly','visible','slide'...]
+:end:
+
+#+begin_src jupyter-python
+  # Prepare a subset for numericalization
+  toks200 = txts[:200].map(tkn)
+  toks200[0]
+#+end_src
+
+#+RESULTS:
+:results:
+: (#537) ['xxbos','what','can','i','say',',','this','film','is','amazing'...]
+:end:
+We apply the numericalization with the ~Numericalize~ class.
+#+begin_src jupyter-python
+  # Numericalize
+  # Lists words -- first special tokens, then in frequency order
+  num = Numericalize()
+  num.setup(toks200)
+  coll_repr(num.vocab, 20)
+#+end_src
+
+#+RESULTS:
+:results:
+: (#2152) ['xxunk','xxpad','xxbos','xxeos','xxfld','xxrep','xxwrep','xxup','xxmaj','the',',','.','and','of','a','to','is','in','it','i'...]
+:end:
+
+#+begin_src jupyter-python
+  # print some text in numericalized form
+  nums = num(toks)[:20]; nums
+#+end_src
+
+#+RESULTS:
+:results:
+: tensor([   2,   72,   75,   19,  153,   10,   22,   29,   16,  329,   11,   18,
+:           63,  114, 1575,   58,  162,   29,  108,   28])
+:end:
+:end:
+
+#+begin_src jupyter-python
+  # Map back to original text
+  ' '.join(num.vocab[o] for o in nums)
+#+end_src
+
+#+RESULTS:
+:results:
+: xxbos what can i say , this film is amazing . it has its flaws like every film does for
+:end:
+***** Putting Texts into Batches for a Language Model
+      We can't just resize text to the desired dimensions as we could with images. We want our batches to run in order, each picking up where the last left off. Another challenge is that language models typically include a large number of tokens -- likely more than can fit in GPU memory. At each epoch, we (1) shuffle our collection of documents; (2) concatenate them into a stream of tokens; (3) cut that stream into a batch of fixed-size mini-streams in order.
+
+      Let's make our dataloader and take a look at one batch:
+#+begin_src jupyter-python
+  # numericalize
+  nums200 = toks200.map(num)
+
+  # pass to LMDataloader
+  dl = LMDataLoader(nums200)
+
+  # check results by looking at first batch
+  x,y = first(dl)
+  x.shape, y.shape
+
+  # Look at first row of independent variable
+  ' '.join(num.vocab[o] for o in x[0][:20])
+#+end_src
+
+#+RESULTS:
+:results:
+: xxbos what can i say , this film is amazing . it has its flaws like every film does for
+:end:
+
+Now we check out the dependent variable. Note that it is offset from the independent variable by one position.
+#+begin_src jupyter-python
+  # Look at dependent variable
+  # same as independent but offset by one
+
+  ' '.join(num.vocab[o] for o in y[0][:20])
+#+end_src
+  
+
+#+RESULTS:
+:results:
+: what can i say , this film is amazing . it has its flaws like every film does for example
+:end:
+
+***** The easier way of preprocessing: DataBlock
+      We can, of course, use the high-level DataBlock API to prepare our data for the model. Specifically, we use a ~TextBlock~.
+
+#+begin_src jupyter-python
+  # get items function
+  get_imdb = partial(get_text_files, folders=['train','test','unsup'])
+
+  # datablock
+  dls_lm = DataBlock(
+      blocks=TextBlock.from_folder(path, is_lm=True),
+      get_items=get_imdb, splitter=RandomSplitter(0.1)
+      ).dataloaders(path, path=path, bs=128, seq_len=80)
+
+  dls_lm.show_batch(max_n=2)
+#+end_src
+
+#+RESULTS:
+:results:
+#+begin_export html
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>text</th>
+      <th>text_</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>xxbos xxmaj an occasionally amusing , often confusing , gleefully profane 70 's movie that has n't really aged well . a precursor to xxmaj saturday xxup night xxup live , it 's a hodgepodge of spoofs and takeoffs of popular movies of the time . xxmaj some of the material is quite good ( ' the xxmaj shaggy xxmaj studio xxmaj executive , ' where xxmaj walt xxmaj disney comes back as a guy in a dog suit )</td>
+      <td>xxmaj an occasionally amusing , often confusing , gleefully profane 70 's movie that has n't really aged well . a precursor to xxmaj saturday xxup night xxup live , it 's a hodgepodge of spoofs and takeoffs of popular movies of the time . xxmaj some of the material is quite good ( ' the xxmaj shaggy xxmaj studio xxmaj executive , ' where xxmaj walt xxmaj disney comes back as a guy in a dog suit ) ,</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>. xxmaj one of them , a creepy looking dude named xxmaj barbado , seems to set off invisible wind chimes wherever he goes , it ca n't be his necklace , that seems to stay pretty still . xxmaj when xxmaj barbado sits near the shore one day and plays his flute , this coffin washes up on the shore and of course you know who 's in it . xxmaj the coffin gets dragged to an undisclosed location</td>
+      <td>xxmaj one of them , a creepy looking dude named xxmaj barbado , seems to set off invisible wind chimes wherever he goes , it ca n't be his necklace , that seems to stay pretty still . xxmaj when xxmaj barbado sits near the shore one day and plays his flute , this coffin washes up on the shore and of course you know who 's in it . xxmaj the coffin gets dragged to an undisclosed location and</td>
+    </tr>
+  </tbody>
+</table>
+#+end_export
+:end:
+
+~TextBlock~ implements a few efficiency optimizations:
+- saves the tokenized documents in a temp folder so it doesn't need to do it more than once
+- runs processes in parallel to take advantage of multiple CPUs.
+**** Fine-Tune the Language Model
+We will use a recurrent neural network (RNN) with an architecture called "AWD-LSTM". In this architecture, embeddings in the pretrained model are merged with random embeddings added for words /not/ in the original vocab. The learner handles this automatically.
+#+begin_src jupyter-python
+  learn = language_model_learner(
+      dls_lm, AWD_LSTM, drop_mult=0.3,
+      metrics=[accuracy, Perplexity()]) #.to_fp16() requires GPU
+#+end_src
+
+#+RESULTS:
+:results:
+:end:
+
+- cross-entropy loss is used. We basically have a classification problem; the different categories are the words in our vocab.
+- The perplexity metric is the exponential of the loss.
+
+It takes a long time to train each epoch, so we go one at a time and save the in-between results.
+#+begin_src jupyter-python
+  learn.fit_one_cycle(1, 2e-2)
+  learn.reco
+#+end_src
+
+#+RESULTS:
+:results:
+#+begin_export html
+
+    <div>
+        <style>
+            /* Turns off some styling */
+            progress {
+                /* gets rid of default border in Firefox and Opera. */
+                border: none;
+                /* Needs to be in here for Safari polyfill so background images work as expected. */
+                background-size: auto;
+            }
+            .progress-bar-interrupted, .progress-bar-interrupted::-webkit-progress-bar {
+                background: #F44336;
+            }
+        </style>
+      <progress value='0' class='' max='1' style='width:300px; height:20px; vertical-align: middle;'></progress>
+      
+    </div>
+#+end_export
+:end:
+:end:
+
+And that killed the kernel, so we'll work on this later.
+
+#+begin_src jupyter-python
+#+end_src
 
 * Testing Jupyter Mode Source Blocks
 
